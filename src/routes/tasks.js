@@ -8,7 +8,8 @@ const {
   updateTask,
   deleteTask,
   updateTaskStatus,
-  logTime
+  logTime,
+  getTimeTracked
 } = require('../controllers/taskController');
 
 const router = express.Router();
@@ -324,6 +325,74 @@ const handleValidationErrors = (req, res, next) => {
  *         description: Internal server error
  */
 
+/**
+ * @swagger
+ * /api/tasks/time-tracking:
+ *   get:
+ *     summary: Get time tracking data
+ *     tags: [Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     description: |
+ *       Get time tracking data grouped by date. 
+ *       For regular users: shows their own time logs.
+ *       For admin users: shows all users' time logs with user details.
+ *     responses:
+ *       200:
+ *         description: Time tracking data retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 timeLogs:
+ *                   type: array
+ *                   items:
+ *                     oneOf:
+ *                       - type: object
+ *                         properties:
+ *                           date:
+ *                             type: string
+ *                             format: date
+ *                           total_minutes:
+ *                             type: integer
+ *                           log_count:
+ *                             type: integer
+ *                       - type: object
+ *                         properties:
+ *                           date:
+ *                             type: string
+ *                             format: date
+ *                           total_minutes:
+ *                             type: integer
+ *                           total_log_count:
+ *                             type: integer
+ *                           users:
+ *                             type: array
+ *                             items:
+ *                               type: object
+ *                               properties:
+ *                                 user_id:
+ *                                   type: string
+ *                                 username:
+ *                                   type: string
+ *                                 minutes:
+ *                                   type: integer
+ *                                 log_count:
+ *                                   type: integer
+ *                 message:
+ *                   type: string
+ *                 isEmpty:
+ *                   type: boolean
+ *                 isAdmin:
+ *                   type: boolean
+ *                   description: Present only for admin users
+ *       401:
+ *         description: Access token required
+ *       500:
+ *         description: Internal server error
+ */
+
 const validateTask = [
   body('title')
     .trim()
@@ -356,5 +425,6 @@ router.patch('/:id/status', [
   body('status').isIn(['todo', 'in_progress', 'done']).withMessage('Invalid status')
 ], handleValidationErrors, updateTaskStatus);
 router.post('/:id/time', validateTimeLog, handleValidationErrors, logTime);
+router.get('/time-tracking', getTimeTracked);
 
 module.exports = router;

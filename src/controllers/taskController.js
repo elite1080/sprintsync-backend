@@ -69,6 +69,103 @@ const createTask = async (req, res) => {
   }
 };
 
+const getTimeTracked = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    let query = '';
+    let params = [];
+    const isAdmin = req.user.isAdmin;
+    console.log('isAdmin', isAdmin);  
+    if (isAdmin) {
+      // Get sum of minutes per date for all time logs of all users with user details
+      query = `
+        SELECT 
+          DATE(tl.logged_at) as date,
+          u.id as user_id,
+          u.username,
+          SUM(tl.minutes) as total_minutes,
+          COUNT(*) as log_count
+        FROM time_logs tl
+        JOIN users u ON tl.user_id = u.id
+        GROUP BY DATE(tl.logged_at), u.id, u.username
+        ORDER BY date DESC, u.username
+      `;
+    } else {
+      // Get sum of minutes per date for all time logs of the user
+      query = `
+        SELECT 
+          DATE(logged_at) as date,
+          SUM(minutes) as total_minutes,
+          COUNT(*) as log_count
+        FROM time_logs 
+        WHERE user_id = ? 
+        GROUP BY DATE(logged_at) 
+        ORDER BY date DESC
+      `;
+    }
+    
+    params = req.user.isAdmin ? [] : [userId];    
+    
+    db.all(query, [params], (err, timeLogs) => {
+      if (err) {
+        logger.error('Time tracking error', { error: err.message });
+        return res.status(500).json({ error: 'Failed to fetch time logs' });
+      }
+
+      const timeLogsList = timeLogs || [];
+      
+      if (timeLogsList.length === 0) {
+        return res.json({ 
+          timeLogs: [],
+          message: 'No time logs found. Start tracking your time to see your progress!',
+          isEmpty: true
+        });
+      }
+
+      // For admin users, group by date and show user breakdown
+      if (isAdmin) {
+        const groupedByDate = {};
+        timeLogsList.forEach(log => {
+          if (!groupedByDate[log.date]) {
+            groupedByDate[log.date] = {
+              date: log.date,
+              total_minutes: 0,
+              total_log_count: 0,
+              users: []
+            };
+          }
+          groupedByDate[log.date].total_minutes += log.total_minutes;
+          groupedByDate[log.date].total_log_count += log.log_count;
+          groupedByDate[log.date].users.push({
+            user_id: log.user_id,
+            username: log.username,
+            minutes: log.total_minutes,
+            log_count: log.log_count
+          });
+        });
+
+        const adminResponse = Object.values(groupedByDate).sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        return res.json({ 
+          timeLogs: adminResponse,
+          message: `Found time logs for ${adminResponse.length} day(s) across all users`,
+          isEmpty: false,
+          isAdmin: true
+        });
+      }
+
+      res.json({ 
+        timeLogs: timeLogsList,
+        message: `Found time logs for ${timeLogsList.length} day(s)`,
+        isEmpty: false
+      });
+    });
+  } catch (error) {
+    logger.error('Time tracking error', { error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};  
+
 const getTasks = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -335,5 +432,6 @@ module.exports = {
   updateTask,
   deleteTask,
   updateTaskStatus,
-  logTime
+  logTime,
+  getTimeTracked
 };
