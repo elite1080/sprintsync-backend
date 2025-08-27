@@ -106,7 +106,7 @@ const getTimeTracked = async (req, res) => {
     
     params = req.user.isAdmin ? [] : [userId];    
     
-    db.all(query, [params], (err, timeLogs) => {
+    db.all(query, params, (err, timeLogs) => {
       if (err) {
         logger.error('Time tracking error', { error: err.message });
         return res.status(500).json({ error: 'Failed to fetch time logs' });
@@ -122,27 +122,38 @@ const getTimeTracked = async (req, res) => {
         });
       }
 
-      // For admin users, group by date and show user breakdown
-      if (isAdmin) {
-        const groupedByDate = {};
-        timeLogsList.forEach(log => {
-          if (!groupedByDate[log.date]) {
-            groupedByDate[log.date] = {
-              date: log.date,
-              total_minutes: 0,
-              total_log_count: 0,
-              users: []
-            };
-          }
-          groupedByDate[log.date].total_minutes += log.total_minutes;
-          groupedByDate[log.date].total_log_count += log.log_count;
-          groupedByDate[log.date].users.push({
-            user_id: log.user_id,
-            username: log.username,
-            minutes: log.total_minutes,
-            log_count: log.log_count
+              // For admin users, group by date and show user breakdown
+        if (isAdmin) {
+          const groupedByDate = {};
+          timeLogsList.forEach(log => {
+            if (!groupedByDate[log.date]) {
+              groupedByDate[log.date] = {
+                date: log.date,
+                total_minutes: 0,
+                total_log_count: 0,
+                auto_logged_minutes: 0,
+                manual_logged_minutes: 0,
+                users: []
+              };
+            }
+            groupedByDate[log.date].total_minutes += log.total_minutes;
+            groupedByDate[log.date].total_log_count += log.log_count;
+            
+            // Track auto-logged vs manual time
+            if (log.is_auto_logged) {
+              groupedByDate[log.date].auto_logged_minutes += log.total_minutes;
+            } else {
+              groupedByDate[log.date].manual_logged_minutes += log.total_minutes;
+            }
+            
+            groupedByDate[log.date].users.push({
+              user_id: log.user_id,
+              username: log.username,
+              minutes: log.total_minutes,
+              log_count: log.log_count,
+              is_auto_logged: log.is_auto_logged || false
+            });
           });
-        });
 
         const adminResponse = Object.values(groupedByDate).sort((a, b) => new Date(b.date) - new Date(a.date));
         
@@ -150,7 +161,13 @@ const getTimeTracked = async (req, res) => {
           timeLogs: adminResponse,
           message: `Found time logs for ${adminResponse.length} day(s) across all users`,
           isEmpty: false,
-          isAdmin: true
+          isAdmin: true,
+          summary: {
+            total_days: adminResponse.length,
+            total_minutes: adminResponse.reduce((sum, day) => sum + day.total_minutes, 0),
+            auto_logged_minutes: adminResponse.reduce((sum, day) => sum + day.auto_logged_minutes, 0),
+            manual_logged_minutes: adminResponse.reduce((sum, day) => sum + day.manual_logged_minutes, 0)
+          }
         });
       }
 
@@ -347,27 +364,82 @@ const updateTaskStatus = async (req, res) => {
       return res.status(400).json({ error: 'Invalid status value' });
     }
 
-    db.run(
-      'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      [status, new Date().toISOString(), id, userId],
-      function(err) {
+    // First, get the current task to check its status and estimated time
+    db.get(
+      'SELECT status, total_minutes FROM tasks WHERE id = ? AND user_id = ?',
+      [id, userId],
+      (err, currentTask) => {
         if (err) {
-          logger.error('Task status update error', { error: err.message });
-          return res.status(500).json({ error: 'Failed to update task status' });
+          logger.error('Task fetch error during status update', { error: err.message });
+          return res.status(500).json({ error: 'Failed to fetch task' });
         }
 
-        if (this.changes === 0) {
+        if (!currentTask) {
           return res.status(404).json({ 
             error: 'Task not found',
             message: 'The task you are trying to update does not exist or you do not have access to it'
           });
         }
 
-        res.json({ 
-          message: 'Task status updated successfully', 
-          status,
-          changes: this.changes
-        });
+        const previousStatus = currentTask.status;
+        const estimatedMinutes = currentTask.total_minutes || 0;
+
+        // Update the task status
+        db.run(
+          'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+          [status, new Date().toISOString(), id, userId],
+          function(err) {
+            if (err) {
+              logger.error('Task status update error', { error: err.message });
+              return res.status(500).json({ error: 'Failed to update task status' });
+            }
+
+            if (this.changes === 0) {
+              return res.status(404).json({ 
+                error: 'Task not found',
+                message: 'The task you are trying to update does not exist or you do not have access to it'
+              });
+            }
+
+            // Handle automatic time logging based on status change
+            if (status === 'done' && previousStatus !== 'done' && estimatedMinutes > 0) {
+              // Task was marked as done - log the estimated time
+              const timeLogId = uuidv4();
+              const now = new Date().toISOString();
+              
+              db.run(
+                'INSERT INTO time_logs (id, task_id, user_id, minutes, logged_at, is_auto_logged) VALUES (?, ?, ?, ?, ?, ?)',
+                [timeLogId, id, userId, estimatedMinutes, now, 1],
+                function(err) {
+                  if (err) {
+                    logger.error('Auto time logging error', { error: err.message });
+                    // Don't fail the status update, just log the error
+                  }
+                }
+              );
+            } else if ((status === 'in_progress' || status === 'todo') && previousStatus === 'done') {
+              // Task was moved back from done - remove the auto-logged time
+              db.run(
+                'DELETE FROM time_logs WHERE task_id = ? AND user_id = ? AND is_auto_logged = 1',
+                [id, userId],
+                function(err) {
+                  if (err) {
+                    logger.error('Auto time log removal error', { error: err.message });
+                    // Don't fail the status update, just log the error
+                  }
+                }
+              );
+            }
+
+            res.json({ 
+              message: 'Task status updated successfully', 
+              status,
+              changes: this.changes,
+              autoTimeLogged: status === 'done' && previousStatus !== 'done' && estimatedMinutes > 0,
+              autoTimeRemoved: (status === 'in_progress' || status === 'todo') && previousStatus === 'done'
+            });
+          }
+        );
       }
     );
   } catch (error) {

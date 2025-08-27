@@ -281,6 +281,24 @@ const handleValidationErrors = (req, res, next) => {
  *     responses:
  *       200:
  *         description: Task status updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 status:
+ *                   type: string
+ *                   enum: [todo, in_progress, done]
+ *                 changes:
+ *                   type: integer
+ *                 autoTimeLogged:
+ *                   type: boolean
+ *                   description: Whether estimated time was automatically logged
+ *                 autoTimeRemoved:
+ *                   type: boolean
+ *                   description: Whether auto-logged time was removed
  *       400:
  *         description: Invalid status value
  *       401:
@@ -380,6 +398,15 @@ const handleValidationErrors = (req, res, next) => {
  *                                   type: integer
  *                                 log_count:
  *                                   type: integer
+ *                                 is_auto_logged:
+ *                                   type: boolean
+ *                                   description: Whether this time was automatically logged
+ *                           auto_logged_minutes:
+ *                             type: integer
+ *                             description: Total minutes from auto-logged time
+ *                           manual_logged_minutes:
+ *                             type: integer
+ *                             description: Total minutes from manual time logging
  *                 message:
  *                   type: string
  *                 isEmpty:
@@ -387,6 +414,22 @@ const handleValidationErrors = (req, res, next) => {
  *                 isAdmin:
  *                   type: boolean
  *                   description: Present only for admin users
+ *                 summary:
+ *                   type: object
+ *                   description: Summary statistics (admin only)
+ *                   properties:
+ *                     total_days:
+ *                       type: integer
+ *                       description: Number of days with time logs
+ *                     total_minutes:
+ *                       type: integer
+ *                       description: Total minutes across all days
+ *                     auto_logged_minutes:
+ *                       type: integer
+ *                       description: Total minutes from auto-logged time
+ *                     manual_logged_minutes:
+ *                       type: integer
+ *                       description: Total minutes from manual time logging
  *       401:
  *         description: Access token required
  *       500:
@@ -418,6 +461,7 @@ router.use(authenticateToken);
 
 router.post('/', validateTask, handleValidationErrors, createTask);
 router.get('/', getTasks);
+router.get('/time-tracking', getTimeTracked);
 router.get('/:id', getTaskById);
 router.put('/:id', validateTask, handleValidationErrors, updateTask);
 router.delete('/:id', deleteTask);
@@ -425,6 +469,5 @@ router.patch('/:id/status', [
   body('status').isIn(['todo', 'in_progress', 'done']).withMessage('Invalid status')
 ], handleValidationErrors, updateTaskStatus);
 router.post('/:id/time', validateTimeLog, handleValidationErrors, logTime);
-router.get('/time-tracking', getTimeTracked);
 
 module.exports = router;

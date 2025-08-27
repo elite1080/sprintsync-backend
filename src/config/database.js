@@ -46,9 +46,41 @@ db.serialize(() => {
     user_id TEXT NOT NULL,
     minutes INTEGER NOT NULL,
     logged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_auto_logged BOOLEAN DEFAULT FALSE,
     FOREIGN KEY (task_id) REFERENCES tasks (id),
     FOREIGN KEY (user_id) REFERENCES users (id)
   )`);
+
+  // Safely add is_auto_logged column to existing time_logs table
+  db.get("PRAGMA table_info(time_logs)", (err, rows) => {
+    if (err) {
+      console.error('Error checking table schema:', err.message);
+      return;
+    }
+    
+    // Check if the column already exists
+    db.all("PRAGMA table_info(time_logs)", (err, columns) => {
+      if (err) {
+        console.error('Error getting table columns:', err.message);
+        return;
+      }
+      
+      const hasAutoLoggedColumn = columns.some(col => col.name === 'is_auto_logged');
+      
+      if (!hasAutoLoggedColumn) {
+        // Column doesn't exist, add it
+        db.run(`ALTER TABLE time_logs ADD COLUMN is_auto_logged BOOLEAN DEFAULT FALSE`, (err) => {
+          if (err) {
+            console.error('Error adding is_auto_logged column:', err.message);
+          } else {
+            console.log('Successfully added is_auto_logged column to time_logs table');
+          }
+        });
+      } else {
+        console.log('Column is_auto_logged already exists in time_logs table');
+      }
+    });
+  });
 });
 
 module.exports = db;
